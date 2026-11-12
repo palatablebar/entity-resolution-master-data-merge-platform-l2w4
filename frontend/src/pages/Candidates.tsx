@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { candidateApi } from '../api/candidates';
 import { runApi } from '../api/runs';
 import { EmptyState } from '../components/common/EmptyState';
 import { RecordDiff } from '../components/common/RecordDiff';
+import { RuleVersionBadge, RuleVersionBar } from '../components/common/RuleVersionBar';
 import { ScoreBreakdown } from '../components/common/ScoreBreakdown';
 import { StatusStamp } from '../components/common/StatusStamp';
 import { BLOCKING_KEY_LABELS, CANDIDATE_STATUS_LABELS, DECISION_LABELS } from '../constants/resolution';
@@ -24,9 +26,12 @@ export const CandidatesPage = () => {
   const activeRunId = useRunStore((state) => state.activeRunId);
   const setActiveRun = useRunStore((state) => state.setActiveRun);
   const refreshOverview = useRunStore((state) => state.refresh);
+  const [searchParams] = useSearchParams();
+  const runQuery = searchParams.get('run') ?? '';
+  const affectedQuery = searchParams.get('affected') === '1';
 
   const [runs, setRuns] = useState<Run[]>([]);
-  const [runId, setRunId] = useState<string | undefined>(activeRunId ?? undefined);
+  const [runId, setRunId] = useState<string | undefined>(runQuery || activeRunId || undefined);
   const [decision, setDecision] = useState('review');
   const [status, setStatus] = useState('pending');
   const [page, setPage] = useState(1);
@@ -37,6 +42,7 @@ export const CandidatesPage = () => {
   const loadRecordCounts = useRecordStore((state) => state.loadCounts);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Candidate | null>(null);
+  const [affectedOnly, setAffectedOnly] = useState(affectedQuery);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,6 +73,7 @@ export const CandidatesPage = () => {
       run_id: runId,
       decision,
       status,
+      affected_only: affectedOnly,
       page,
       page_size: PAGE_SIZE,
     });
@@ -75,7 +82,7 @@ export const CandidatesPage = () => {
       if (current && data.items.some((item) => item.id === current)) return current;
       return data.items[0]?.id ?? null;
     });
-  }, [runId, decision, status, page, loadCandidatePage]);
+  }, [runId, decision, status, page, affectedOnly, loadCandidatePage]);
 
   useEffect(() => {
     void loadCandidates();
@@ -127,7 +134,7 @@ export const CandidatesPage = () => {
         </div>
         <div className="page-note">
           左侧是按分数排序的可疑对；右侧把两侧原始值并排铺开，逐字段看相似度、权重与贡献。
-          只有 review 区间（0.75–0.92）且未处理的候选需要人工落章。
+          候选取自本卷冻结的规则版本；规则后续调整只影响新运行，变化影响会单独标出。
         </div>
         <div className="head-actions">
           <label className="field" style={{ marginBottom: 0, minWidth: 250 }}>
@@ -143,6 +150,7 @@ export const CandidatesPage = () => {
               {runs.map((run) => (
                 <option key={run.id} value={run.id}>
                   {run.run_label}
+                  {run.rule_snapshot?.rule_version ? ` · v${run.rule_snapshot.rule_version}` : ''}
                 </option>
               ))}
             </select>
@@ -177,6 +185,18 @@ export const CandidatesPage = () => {
               <option value="rejected">已拒绝</option>
             </select>
           </label>
+          <label className="field" style={{ marginBottom: 0, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <input
+              type="checkbox"
+              checked={affectedOnly}
+              onChange={(event) => {
+                setAffectedOnly(event.target.checked);
+                setPage(1);
+              }}
+              style={{ width: 'auto' }}
+            />
+            <span className="field-label" style={{ marginBottom: 0 }}>只看规则变化后受影响</span>
+          </label>
         </div>
       </div>
 
@@ -187,6 +207,11 @@ export const CandidatesPage = () => {
 
       {error ? <div className="notice error" style={{ marginBottom: 14 }}>{error}</div> : null}
       {message ? <div className="notice" style={{ marginBottom: 14 }}>{message}</div> : null}
+      {affectedOnly ? (
+        <div className="notice" style={{ marginBottom: 14 }}>
+          正在只看「规则变化后受影响」的候选：判定按当前规则重算，仅用于对照，本卷结果仍按冻结版本解释。
+        </div>
+      ) : null}
       {!canReview ? (
         <div className="notice" style={{ marginBottom: 14 }}>
           当前角色（{user?.role}）为只读，可以查看候选与证据，但不能确认或拒绝。
@@ -199,8 +224,12 @@ export const CandidatesPage = () => {
             <span className="card-title">候选清单</span>
             <span className="card-caption">
               {currentRun ? currentRun.run_label : '全部运行'} · 共 {pageData?.total ?? 0} 对
+              {affectedOnly ? ' · 仅规则变化后受影响' : ''}
             </span>
           </div>
+          {currentRun?.rule_context?.comparison?.affected_basis ? (
+            <RuleVersionBar comparison={currentRun.rule_context.comparison} compact />
+          ) : null}
           {pageData && pageData.items.length === 0 ? (
             <EmptyState title="当前筛选下没有候选" hint="试试把判定切到「待复核」，或发起一次新的解析运行。" />
           ) : (
@@ -224,6 +253,11 @@ export const CandidatesPage = () => {
                   >
                     <td className="num" style={{ color: 'var(--vermilion)', fontWeight: 600 }}>
                       {formatScore(item.score)}
+                      {item.rule_impact?.affected && item.rule_impact.new_decision ? (
+                        <div className="dim" style={{ fontSize: 10, fontWeight: 400 }}>
+                          → {DECISION_LABELS[item.rule_impact.new_decision]}
+                        </div>
+                      ) : null}
                     </td>
                     <td>
                       <StatusStamp kind="decision" value={item.decision} />
@@ -272,10 +306,17 @@ export const CandidatesPage = () => {
               <div className="card-head">
                 <span className="card-title">鉴定证据</span>
                 <StatusStamp kind="decision" value={detail.decision} />
+                <RuleVersionBadge context={detail.rule_context} impact={detail.rule_impact} />
                 <span className="card-caption" style={{ marginLeft: 'auto' }}>
                   {DECISION_LABELS[detail.decision]} · {formatScore(detail.score)}
                 </span>
               </div>
+              {detail.rule_impact?.affected ? (
+                <div className="notice" style={{ marginBottom: 12 }}>
+                  按当前规则重算：分数 {formatScore(detail.score)} → {formatScore(detail.rule_impact.new_score)}{' '}
+                  {detail.rule_impact.new_decision ? DECISION_LABELS[detail.rule_impact.new_decision] : ''}。本卷仍以冻结版本为准，本结果仅作对照。
+                </div>
+              ) : null}
               <RecordDiff left={detail.left} right={detail.right} />
               <div style={{ marginTop: 18 }}>
                 <div className="paper-label">加权打分明细</div>
@@ -284,6 +325,12 @@ export const CandidatesPage = () => {
               <div className="formula" style={{ marginTop: 12 }}>
                 总分 = Σ(字段权重 × 相似度) / Σ(可用字段权重)；缺失字段不按 0 分计，而是从分母里剔除。
               </div>
+
+              <RuleVersionBar
+                comparison={detail.rule_context?.comparison}
+                compact
+                note={detail.rule_impact?.reason ?? null}
+              />
 
               <div style={{ marginTop: 16 }}>
                 <div className="paper-label">落章</div>

@@ -36,6 +36,7 @@ from src.models.match_candidate import MatchCandidate
 from src.models.merge_rule import MergeRule
 from src.models.resolution_run import ResolutionRun
 from src.models.source_record import SourceRecord
+from src.services import rule_service
 from src.utils.errors import AppError
 from src.utils.logger import get_logger
 
@@ -46,14 +47,47 @@ def _edge_key(left: str, right: str) -> tuple[str, str]:
     return (left, right) if left < right else (right, left)
 
 
+def _clear_derived(db: Session, run_id: Any) -> None:
+    """删除该运行的全部派生产物（候选 / 簇 / 黄金档案）。
+
+    失败后恢复或重复执行同一个 run 时先清空再重建，保证同一 run 的派生产物
+    不会因重试而翻倍；review 痕迹只对成功的运行有意义。
+    """
+    db.query(GoldenRecord).filter(GoldenRecord.run_id == run_id).delete(synchronize_session=False)
+    db.query(EntityCluster).filter(EntityCluster.run_id == run_id).delete(synchronize_session=False)
+    db.query(MatchCandidate).filter(MatchCandidate.run_id == run_id).delete(synchronize_session=False)
+
+
 def execute_run(
     db: Session,
     run: ResolutionRun,
-    rule: MergeRule,
+    rule: MergeRule | None = None,
     *,
     reference_time: datetime | None = None,
 ) -> ResolutionRun:
-    """同步执行一次运行；调用方（worker / seed）负责事务边界之外的重试与日志。"""
+    """同步执行一次运行；调用方（worker / seed）负责事务边界之外的重试与日志。
+
+    规则参数只从 run.params_json 的冻结快照读取（rule 参数仅为旧调用签名兼容，
+    不再参与计算）。这样排队期间或失败恢复期间规则升版，都不会改变本 run 的口径。
+    """
+    # 同一 run 已成功：直接返回，不重建派生产物（重复执行不新增候选/簇/档案）。
+    if run.status == RunStatus.SUCCEEDED.value:
+        logger.info("run=%s already succeeded, skip re-execution", run.id)
+        return run
+
+    try:
+        frozen = rule_service.freeze_run(db, run)
+        field_weights = dict(frozen["field_weights"])
+        source_reliability = dict(frozen["source_reliability"])
+        auto_threshold = float(frozen["auto_threshold"])
+        review_threshold = float(frozen["review_threshold"])
+    except AppError as exc:
+        _mark_failed(db, run, exc.code, exc.message)
+        raise
+    except (KeyError, TypeError, ValueError) as exc:
+        _mark_failed(db, run, codes.RULE_INVALID, f"运行冻结的规则参数不完整：{exc}")
+        raise AppError(codes.RULE_INVALID, "运行冻结的规则参数不完整，无法执行", str(exc)) from exc
+
     wall_start = time.perf_counter()
     started_at = reference_time or run.started_at or datetime.now(timezone.utc)
     run.status = RunStatus.RUNNING.value
@@ -63,9 +97,7 @@ def execute_run(
     run.blocking_keys = list(BLOCKING_KEY_LABELS.keys())
 
     # 允许失败后对同一 run 重跑：先清掉上一次的派生产物
-    db.query(GoldenRecord).filter(GoldenRecord.run_id == run.id).delete()
-    db.query(EntityCluster).filter(EntityCluster.run_id == run.id).delete()
-    db.query(MatchCandidate).filter(MatchCandidate.run_id == run.id).delete()
+    _clear_derived(db, run.id)
     db.commit()
 
     try:
@@ -85,8 +117,6 @@ def execute_run(
 
         views = [RecordView.from_model(row) for row in records]
         view_by_id = {view.id: view for view in views}
-        auto_threshold = float(rule.auto_threshold)
-        review_threshold = float(rule.review_threshold)
 
         blocked_pairs, raw_count = generate_blocked_pairs(views)
         kept_pairs, pruned_count = prune_pairs(blocked_pairs, views, view_by_id)
@@ -100,7 +130,7 @@ def execute_run(
         for pair in kept_pairs:
             left = view_by_id[pair.left_id]
             right = view_by_id[pair.right_id]
-            scored = score_pair(left, right, rule.field_weights, auto_threshold, review_threshold)
+            scored = score_pair(left, right, field_weights, auto_threshold, review_threshold)
             score = float(scored["score"])
             decision = str(scored["decision"])
             stats[decision] = stats.get(decision, 0) + 1
@@ -131,7 +161,7 @@ def execute_run(
 
         clusters = build_clusters(auto_edges, review_edges, edge_scores)
         golden_count = 0
-        field_names = list(rule.field_weights.keys())
+        field_names = list(field_weights.keys())
 
         for edge_type, groups in (("auto", clusters["auto"]), ("review", clusters["review"])):
             for group in groups:
@@ -157,7 +187,7 @@ def execute_run(
                 arbitration = arbitrate_golden(
                     members=members,
                     records_by_id=view_by_id,
-                    source_reliability=dict(rule.source_reliability),
+                    source_reliability=source_reliability,
                     fields=field_names,
                     reference_time=started_at or datetime.now(),
                 )
@@ -218,10 +248,16 @@ def execute_run(
 
 
 def _mark_failed(db: Session, run: ResolutionRun, code: str, message: str) -> None:
-    run.status = RunStatus.FAILED.value
-    run.error_code = code
-    run.error_message = message[:500]
-    run.finished_at = datetime.now()
+    # 丢弃本次执行未提交的半成品，避免失败运行留下不完整的候选/簇/档案。
+    run_id = run.id
+    db.rollback()
+    row = db.get(ResolutionRun, run_id)
+    if row is None:
+        return
+    row.status = RunStatus.FAILED.value
+    row.error_code = code
+    row.error_message = message[:500]
+    row.finished_at = datetime.now(timezone.utc)
     db.commit()
 
 

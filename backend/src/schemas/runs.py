@@ -17,12 +17,24 @@ def _iso(value: datetime | None) -> str | None:
 
 
 def serialize_run(row: Any) -> dict[str, Any]:
+    params = row.params_json or {}
     return {
         "id": str(row.id),
         "rule_id": str(row.rule_id) if row.rule_id else None,
         "run_label": row.run_label,
         "status": row.status,
-        "params": row.params_json,
+        "params": params,
+        "rule_snapshot": {
+            "rule_name": params.get("rule_name"),
+            "rule_version": params.get("rule_version"),
+            "auto_threshold": params.get("auto_threshold"),
+            "review_threshold": params.get("review_threshold"),
+            "field_weights": params.get("field_weights"),
+            "source_reliability": params.get("source_reliability"),
+            "frozen_at": params.get("frozen_at"),
+            "frozen_from": params.get("frozen_from"),
+            "rerun_of": params.get("rerun_of"),
+        },
         "blocking_keys": row.blocking_keys,
         "records_scanned": row.records_scanned,
         "blocked_pairs_raw": row.blocked_pairs_raw,

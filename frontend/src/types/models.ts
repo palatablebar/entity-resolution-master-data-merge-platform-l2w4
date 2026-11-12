@@ -15,12 +15,85 @@ export type CandidateStatus = 'pending' | 'confirmed' | 'rejected';
 export type ClusterStatus = 'auto_merged' | 'pending_review' | 'confirmed';
 export type GoldenStatus = 'active' | 'provisional';
 
+export interface RuleSnapshotValues {
+  rule_name: string | null;
+  rule_version: number | null;
+  auto_threshold: number | null;
+  review_threshold: number | null;
+  field_weights: Record<string, number> | null;
+  source_reliability: Record<string, number> | null;
+  frozen_at: string | null;
+  frozen_from?: string | null;
+  rerun_of?: string | null;
+}
+
+export interface RuleChange {
+  key: string;
+  group: 'threshold' | 'field_weights' | 'source_reliability' | string;
+  item?: string;
+  label: string;
+  before: number | null;
+  after: number | null;
+}
+
+export interface RuleComparison {
+  snapshot_missing: boolean;
+  run_rule_id: string | null;
+  run_rule_name: string | null;
+  run_rule_version: number | null;
+  current_rule_id: string | null;
+  current_rule_name: string | null;
+  current_rule_version: number | null;
+  current_available: boolean;
+  version_changed: boolean;
+  rule_set_changed: boolean;
+  params_changed: boolean;
+  rule_changed: boolean;
+  affected_basis: boolean;
+  changes: RuleChange[];
+  changed_keys: string[];
+  frozen_values: Record<string, unknown>;
+  current_values: Record<string, unknown> | null;
+}
+
+export interface RuleContext {
+  frozen: Record<string, unknown>;
+  frozen_params: Record<string, unknown>;
+  current: Record<string, unknown> | null;
+  comparison: RuleComparison;
+}
+
+export interface RuleImpact {
+  affected: boolean;
+  reason: string;
+  new_decision?: CandidateDecision | null;
+  new_score?: number | null;
+  score_delta?: number | null;
+  decision_changed?: boolean;
+  changed_fields?: string[];
+  field_changes?: Array<{ field: string; label?: string; before: string; after: string }>;
+}
+
+export interface RunImpactSummary {
+  basis: 'affected_basis' | 'unchanged' | string;
+  rule_changed: boolean;
+  candidates_total: number;
+  candidates_affected: number;
+  candidate_ids: string[];
+  golden_total: number;
+  golden_affected: number;
+  golden_ids: string[];
+}
+
 export interface Run {
   id: string;
   rule_id: string | null;
   run_label: string;
   status: RunStatus;
   params: Record<string, unknown>;
+  rule_snapshot?: RuleSnapshotValues | null;
+  rule_context?: RuleContext | null;
+  rule_impact_summary?: RunImpactSummary | null;
   blocking_keys: string[];
   records_scanned: number;
   blocked_pairs_raw: number;
@@ -83,6 +156,8 @@ export interface Candidate {
   thresholds: { auto: number; review: number } | null;
   reviewed_at: string | null;
   review_note: string | null;
+  rule_context?: RuleContext | null;
+  rule_impact?: RuleImpact | null;
   left?: SourceRecord;
   right?: SourceRecord;
   cluster_id?: string | null;
@@ -136,6 +211,8 @@ export interface GoldenRecord {
   conflict_fields: string[];
   confidence: number;
   status: GoldenStatus;
+  rule_context?: RuleContext | null;
+  rule_impact?: RuleImpact | null;
   display?: Record<string, string | null>;
   cluster?: {
     id: string;
@@ -171,6 +248,7 @@ export interface Overview {
     resolution_runs: number;
   };
   latest_run: Run | null;
+  active_rule?: MergeRule | null;
   labels: Record<string, Record<string, string>>;
   enums: Record<string, string[]>;
   roles: Record<string, string[]>;

@@ -32,7 +32,7 @@ from src.models.merge_rule import MergeRule
 from src.models.resolution_run import ResolutionRun
 from src.models.source_record import SourceRecord
 from src.models.user import User
-from src.services import resolution_service
+from src.services import resolution_service, rule_service
 from src.utils.normalize import (
     DEFAULT_NORMALIZATION,
     normalize_address,
@@ -348,13 +348,7 @@ def _seed_run(
         run_label=label,
         status=RunStatus.QUEUED.value,
         params_json={
-            "rule_id": str(rule.id),
-            "rule_name": rule.name,
-            "rule_version": rule.version,
-            "field_weights": dict(rule.field_weights),
-            "source_reliability": dict(rule.source_reliability),
-            "auto_threshold": rule.auto_threshold,
-            "review_threshold": rule.review_threshold,
+            **rule_service.snapshot(db, rule, freeze_at=reference_time),
             "seed_reference_time": reference_time.isoformat(),
         },
         blocking_keys=["phone_suffix", "name_city", "email_domain"],

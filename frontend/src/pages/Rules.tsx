@@ -3,11 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import type { RuleUpdate } from '../api/rules';
 import { runApi } from '../api/runs';
 import { EmptyState } from '../components/common/EmptyState';
+import { RuleVersionBar } from '../components/common/RuleVersionBar';
 import { useAuthGuard } from '../hooks/useAuthGuard';
 import { useAuthStore } from '../stores/authStore';
 import { useRuleStore } from '../stores/ruleStore';
 import { useRunStore } from '../stores/runStore';
-import type { MergeRule } from '../types/models';
+import type { MergeRule, Run } from '../types/models';
 import { toHumanMessage } from '../utils/errorMessage';
 import { formatDateTime } from '../utils/formatScore';
 
@@ -42,13 +43,24 @@ export const RulesPage = () => {
   const [reviewThreshold, setReviewThreshold] = useState(0.75);
   const [busy, setBusy] = useState(false);
   const [triggering, setTriggering] = useState(false);
+  const [runs, setRuns] = useState<Run[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+
+  const loadRuns = async () => {
+    try {
+      const data = await runApi.list({ page_size: 8 });
+      setRuns(data.items);
+    } catch {
+      /* 运行版本对照非关键路径，忽略 */
+    }
+  };
 
   const load = async () => {
     const items = await loadRules();
     const preferred = items.find((item) => item.is_active) ?? items[0];
     if (preferred) applyRule(preferred, false);
+    await loadRuns();
   };
 
   useEffect(() => {
@@ -88,7 +100,7 @@ export const RulesPage = () => {
         setError('规则保存失败，请检查阈值关系与权重范围。');
         return;
       }
-      setMessage(`规则已保存，版本 v${updated.version}。新版本只影响之后发起的运行。`);
+      setMessage(`规则已保存，版本 v${updated.version}。已排队/运行中的解析仍用原冻结版本，新版本只影响之后发起的运行。`);
       await load();
     } catch (err) {
       setError(toHumanMessage(err));
@@ -123,8 +135,8 @@ export const RulesPage = () => {
           <h1 className="page-title">鉴定尺度</h1>
         </div>
         <div className="page-note">
-          权重决定字段话语权，阈值决定 auto / review / reject 的边界。保存后不会改动历史运行：
-          每次运行的参数都会快照进运行报告。
+          权重决定字段话语权，阈值决定 auto / review / reject 的边界。保存只升版并影响之后发起的运行：
+          每次运行在发起瞬间冻结规则版本，排队或失败恢复期间改规则也不会改变该次运行。
         </div>
         <div className="head-actions">
           <label className="field" style={{ marginBottom: 0, minWidth: 260 }}>
@@ -268,6 +280,53 @@ export const RulesPage = () => {
                 <br />
                 reject：score &lt; {reviewThreshold.toFixed(2)} → 仅留档
               </div>
+            </div>
+
+            <div className="paper-card tint">
+              <div className="card-head">
+                <span className="card-title">运行冻结版本对照</span>
+                <span className="card-caption">保存规则不会改写已发起运行的口径</span>
+              </div>
+              {runs.length === 0 ? (
+                <div className="dim" style={{ fontSize: 13 }}>暂无运行记录。</div>
+              ) : (
+                <table className="table">
+                  <tbody>
+                    {runs.map((run) => {
+                      const comparison = run.rule_context?.comparison;
+                      const summary = run.rule_impact_summary;
+                      return (
+                        <tr key={run.id}>
+                          <td>
+                            <div className="truncate" title={run.run_label}>{run.run_label}</div>
+                            <div className="dim mono" style={{ fontSize: 11 }}>
+                              冻结 v{comparison?.run_rule_version ?? String(run.params.rule_version ?? '—')} → 当前 v
+                              {comparison?.current_rule_version ?? '—'}
+                            </div>
+                          </td>
+                          <td>
+                            {comparison?.affected_basis ? (
+                              <span className="stamp press">受影响</span>
+                            ) : comparison?.version_changed ? (
+                              <span className="stamp neutral">仅版本号变化</span>
+                            ) : (
+                              <span className="stamp olive">一致</span>
+                            )}
+                          </td>
+                          <td className="dim" style={{ fontSize: 12 }}>
+                            {comparison?.affected_basis && summary
+                              ? `候选 ${summary.candidates_affected}/${summary.candidates_total} · 档案 ${summary.golden_affected}/${summary.golden_total}`
+                              : '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+              {runs[0]?.rule_context?.comparison ? (
+                <RuleVersionBar comparison={runs[0].rule_context.comparison} compact />
+              ) : null}
             </div>
 
             <div className="paper-card tint">

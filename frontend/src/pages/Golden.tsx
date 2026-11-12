@@ -3,7 +3,9 @@ import { useSearchParams } from 'react-router-dom';
 import { runApi } from '../api/runs';
 import { EmptyState } from '../components/common/EmptyState';
 import { FieldProvenance } from '../components/common/FieldProvenance';
+import { RuleVersionBadge, RuleVersionBar } from '../components/common/RuleVersionBar';
 import { StatusStamp } from '../components/common/StatusStamp';
+import { FIELD_LABELS } from '../constants/resolution';
 import { useAuthGuard } from '../hooks/useAuthGuard';
 import { useAuthStore } from '../stores/authStore';
 import { useGoldenStore } from '../stores/goldenStore';
@@ -21,12 +23,16 @@ export const GoldenPage = () => {
   const setActiveRun = useRunStore((state) => state.setActiveRun);
   const [searchParams] = useSearchParams();
   const clusterFilter = searchParams.get('cluster') ?? '';
+  const affectedQuery = searchParams.get('affected') === '1';
+  const runQuery = searchParams.get('run') ?? '';
 
   const [runs, setRuns] = useState<Run[]>([]);
-  const [runId, setRunId] = useState<string | undefined>(activeRunId ?? undefined);
+  const [runId, setRunId] = useState<string | undefined>(runQuery || activeRunId || undefined);
   const [status, setStatus] = useState('');
   const [query, setQuery] = useState('');
+  const [affectedOnly, setAffectedOnly] = useState(affectedQuery);
   const [page, setPage] = useState(1);
+  const currentRun = runs.find((item) => item.id === runId) ?? null;
   const pageData = useGoldenStore((state) => state.data);
   const detail = useGoldenStore((state) => state.detail);
   const exporting = useGoldenStore((state) => state.exporting);
@@ -62,6 +68,7 @@ export const GoldenPage = () => {
       status,
       query,
       cluster_id: clusterFilter || undefined,
+      affected_only: affectedOnly,
       page,
       page_size: PAGE_SIZE,
     });
@@ -70,7 +77,7 @@ export const GoldenPage = () => {
       if (current && items.some((item) => item.id === current)) return current;
       return items[0]?.id ?? null;
     });
-  }, [runId, status, query, page, clusterFilter, loadGoldenPage]);
+  }, [runId, status, query, page, clusterFilter, affectedOnly, loadGoldenPage]);
 
   useEffect(() => {
     void load();
@@ -89,7 +96,7 @@ export const GoldenPage = () => {
         </div>
         <div className="page-note">
           每个字段取 reliability 最高的来源：来源权重 × 字段完整度 × 时间衰减（30 天半衰期）。
-          不确定性不隐藏：冲突字段与落选候选都留在档案里。
+          仲裁使用本卷冻结的规则版本；规则后续调整只影响新运行，受影响档案会单独标出。
         </div>
         <div className="head-actions">
           <label className="field" style={{ marginBottom: 0, minWidth: 230 }}>
@@ -105,6 +112,7 @@ export const GoldenPage = () => {
               {runs.map((run) => (
                 <option key={run.id} value={run.id}>
                   {run.run_label}
+                  {run.rule_snapshot?.rule_version ? ` · v${run.rule_snapshot.rule_version}` : ''}
                 </option>
               ))}
             </select>
@@ -135,6 +143,18 @@ export const GoldenPage = () => {
               style={{ width: 130 }}
             />
           </label>
+          <label className="field" style={{ marginBottom: 0, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <input
+              type="checkbox"
+              checked={affectedOnly}
+              onChange={(event) => {
+                setAffectedOnly(event.target.checked);
+                setPage(1);
+              }}
+              style={{ width: 'auto' }}
+            />
+            <span className="field-label" style={{ marginBottom: 0 }}>只看规则变化后受影响</span>
+          </label>
           <button
             className="btn primary"
             disabled={!canExport || exporting}
@@ -162,8 +182,13 @@ export const GoldenPage = () => {
         <div className="paper-card">
           <div className="card-head">
             <span className="card-title">档案索引</span>
-            <span className="card-caption">共 {pageData?.total ?? 0} 份</span>
+            <span className="card-caption">
+              共 {pageData?.total ?? 0} 份{affectedOnly ? ' · 仅规则变化后受影响' : ''}
+            </span>
           </div>
+          {currentRun?.rule_context?.comparison?.affected_basis ? (
+            <RuleVersionBar comparison={currentRun.rule_context.comparison} compact />
+          ) : null}
           {pageData && pageData.items.length === 0 ? (
             <EmptyState title="还没有黄金档案" hint="先发起一次解析运行，或放宽状态筛选。" />
           ) : (
@@ -192,10 +217,14 @@ export const GoldenPage = () => {
                     <td className="num">{formatScore(item.confidence)}</td>
                     <td>
                       <StatusStamp kind="golden" value={item.status} />
+                      {item.rule_impact?.affected ? (
+                        <div style={{ marginTop: 4 }}>
+                          <span className="stamp press">受影响</span>
+                        </div>
+                      ) : null}
                     </td>
                   </tr>
-                ))}
-              </tbody>
+                ))}</tbody>
             </table>
           )}
           <div className="pager">
@@ -221,6 +250,7 @@ export const GoldenPage = () => {
               <div className="card-head">
                 <span className="card-title">{detail.entity_key}</span>
                 <StatusStamp kind="golden" value={detail.status} />
+                <RuleVersionBadge context={detail.rule_context} impact={detail.rule_impact} />
                 {detail.conflict_fields.length > 0 ? (
                   <span className="stamp press">冲突 {detail.conflict_fields.length}</span>
                 ) : null}
@@ -233,12 +263,28 @@ export const GoldenPage = () => {
                   {detail.cluster.record_count} 条来源记录 · {detail.cluster.member_keys.join(' / ')}
                 </div>
               ) : null}
+              {detail.rule_impact?.affected && detail.rule_impact.field_changes?.length ? (
+                <div className="notice" style={{ marginTop: 10 }}>
+                  按当前来源可靠性重排，以下字段的胜出值会改变（本卷档案仍按冻结版本落定）：
+                  {detail.rule_impact.field_changes.map((change) => (
+                    <div key={change.field} className="mono" style={{ fontSize: 12, marginTop: 4 }}>
+                      {FIELD_LABELS[change.field] ?? change.field}：{change.before} →{' '}
+                      <span style={{ color: 'var(--vermilion)' }}>{change.after}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               <div style={{ marginTop: 10 }}>
                 <FieldProvenance fields={detail.fields} />
               </div>
               <div className="formula" style={{ marginTop: 12 }}>
                 reliability = 来源权重 × 字段完整度 × 0.5^(距来源更新天数 / 30)
               </div>
+              <RuleVersionBar
+                comparison={detail.rule_context?.comparison}
+                compact
+                note={detail.rule_impact?.reason ?? null}
+              />
             </div>
           ) : (
             <div className="paper-card">

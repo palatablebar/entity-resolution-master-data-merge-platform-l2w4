@@ -13,11 +13,12 @@ from src.constants.enums import CandidateDecision, CandidateStatus, ClusterStatu
 from src.models.entity_cluster import EntityCluster
 from src.models.golden_record import GoldenRecord
 from src.models.match_candidate import MatchCandidate
+from src.models.resolution_run import ResolutionRun
 from src.models.source_record import SourceRecord
 from src.models.user import User
 from src.schemas.candidates import serialize_candidate
 from src.schemas.records import serialize_record
-from src.services import audit_service
+from src.services import audit_service, rule_impact, rule_service
 from src.utils.errors import AppError, not_found
 from src.utils.pagination import normalize_page
 
@@ -33,6 +34,32 @@ def _record_map(db: Session, candidates: list[MatchCandidate]) -> dict[str, Sour
     return {str(row.id): row for row in rows}
 
 
+def _rule_contexts(db: Session, candidates: list[MatchCandidate]) -> dict[str, dict[str, Any]]:
+    if not candidates:
+        return {}
+    runs = (
+        db.query(ResolutionRun)
+        .filter(ResolutionRun.id.in_({row.run_id for row in candidates}))
+        .all()
+    )
+    return rule_service.contexts_for_runs(db, runs)
+
+
+def attach_impact(candidate: dict[str, Any], context: dict[str, Any] | None) -> dict[str, Any]:
+    """在候选序列化结果上挂规则上下文与「规则变化是否影响本候选」。"""
+    context = context or {}
+    frozen = (context.get("comparison") or {}).get("frozen_values") or {}
+    candidate["rule_context"] = context
+    candidate["rule_impact"] = rule_impact.candidate_impact(
+        candidate.get("features"),
+        candidate.get("score"),
+        candidate.get("decision") or "",
+        comparison=context.get("comparison"),
+        frozen_values=frozen,
+    )
+    return candidate
+
+
 def list_candidates(
     db: Session,
     *,
@@ -41,6 +68,7 @@ def list_candidates(
     status: str | None,
     page: int,
     page_size: int,
+    affected_only: bool = False,
 ) -> dict[str, Any]:
     safe_page, safe_size = normalize_page(page, page_size)
     query = db.query(MatchCandidate)
@@ -50,6 +78,33 @@ def list_candidates(
         query = query.filter(MatchCandidate.decision == decision)
     if status:
         query = query.filter(MatchCandidate.status == status)
+
+    if affected_only and run_id:
+        # 「规则变化后受影响」需要逐对重算，先取本 run 的候选再在内存里过滤分页。
+        all_rows = query.order_by(MatchCandidate.score.desc(), MatchCandidate.created_at.asc()).all()
+        records = _record_map(db, all_rows)
+        contexts = _rule_contexts(db, all_rows)
+        items: list[dict[str, Any]] = []
+        for row in all_rows:
+            payload = serialize_candidate(
+                row,
+                records.get(str(row.left_record_id)),
+                records.get(str(row.right_record_id)),
+            )
+            attach_impact(payload, contexts.get(str(row.run_id)))
+            if payload["rule_impact"].get("affected"):
+                items.append(payload)
+        total = len(items)
+        offset = (safe_page - 1) * safe_size
+        paged = items[offset : offset + safe_size]
+        return {
+            "items": paged,
+            "page": safe_page,
+            "page_size": safe_size,
+            "total": total,
+            "total_pages": max(1, -(-total // safe_size)) if total else 1,
+        }
+
     total = query.with_entities(func.count(MatchCandidate.id)).scalar() or 0
     rows = (
         query.order_by(MatchCandidate.score.desc(), MatchCandidate.created_at.asc())
@@ -58,14 +113,16 @@ def list_candidates(
         .all()
     )
     records = _record_map(db, rows)
-    items = [
-        serialize_candidate(
+    contexts = _rule_contexts(db, rows)
+    items = []
+    for row in rows:
+        payload = serialize_candidate(
             row,
             records.get(str(row.left_record_id)),
             records.get(str(row.right_record_id)),
         )
-        for row in rows
-    ]
+        attach_impact(payload, contexts.get(str(row.run_id)))
+        items.append(payload)
     return {
         "items": items,
         "page": safe_page,
@@ -86,7 +143,9 @@ def get_candidate(db: Session, candidate_id: str) -> dict[str, Any]:
         payload["left"]["raw_payload"] = left.raw_payload
     if right is not None:
         payload["right"]["raw_payload"] = right.raw_payload
-    return payload
+    run = db.get(ResolutionRun, row.run_id)
+    context = rule_service.context_for_run(db, run) if run is not None else None
+    return attach_impact(payload, context)
 
 
 def review_candidate(

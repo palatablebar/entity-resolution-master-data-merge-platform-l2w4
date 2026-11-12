@@ -5,6 +5,7 @@ interface CandidateQuery {
   run_id?: string;
   decision?: string;
   status?: string;
+  affected_only?: boolean;
   page?: number;
   page_size?: number;
 }
@@ -13,7 +14,7 @@ export const candidateApi = {
   list: (query: CandidateQuery) => {
     const params = new URLSearchParams();
     Object.entries(query).forEach(([key, value]) => {
-      if (value !== undefined && value !== '') params.set(key, String(value));
+      if (value !== undefined && value !== '' && value !== false) params.set(key, String(value));
     });
     const suffix = params.toString();
     return api.get<Page<Candidate>>(`/candidates${suffix ? `?${suffix}` : ''}`);

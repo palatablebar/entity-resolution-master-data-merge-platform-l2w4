@@ -16,9 +16,16 @@ def list_candidates(
     status: str | None,
     page: int,
     page_size: int,
+    affected_only: bool = False,
 ) -> dict:
     return candidate_service.list_candidates(
-        db, run_id=run_id, decision=decision, status=status, page=page, page_size=page_size
+        db,
+        run_id=run_id,
+        decision=decision,
+        status=status,
+        page=page,
+        page_size=page_size,
+        affected_only=affected_only,
     )
 
 

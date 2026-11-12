@@ -24,7 +24,9 @@ from src.models.match_candidate import MatchCandidate
 from src.models.merge_rule import MergeRule
 from src.models.resolution_run import ResolutionRun
 from src.models.source_record import SourceRecord
+from src.schemas.rules import serialize_rule
 from src.schemas.runs import serialize_run
+from src.services import rule_service
 from src.services.run_service import latest_succeeded_run
 
 
@@ -46,9 +48,15 @@ def overview(db: Session) -> dict[str, Any]:
         "merge_rules": db.query(func.count(MergeRule.id)).scalar() or 0,
         "resolution_runs": db.query(func.count(ResolutionRun.id)).scalar() or 0,
     }
+    latest_payload = None
+    if latest is not None:
+        latest_payload = serialize_run(latest)
+        latest_payload["rule_context"] = rule_service.context_for_run(db, latest)
+    active_rule = rule_service.current_active_rule(db)
     return {
         "counts": counts,
-        "latest_run": serialize_run(latest) if latest else None,
+        "latest_run": latest_payload,
+        "active_rule": serialize_rule(active_rule) if active_rule is not None else None,
         "labels": {
             "source_system": SOURCE_SYSTEM_LABELS,
             "blocking_keys": BLOCKING_KEY_LABELS,

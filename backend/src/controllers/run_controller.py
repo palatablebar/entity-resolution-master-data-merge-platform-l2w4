@@ -5,7 +5,7 @@ from fastapi import Request
 from sqlalchemy.orm import Session
 
 from src.models.user import User
-from src.schemas.runs import RunCreateRequest, serialize_run
+from src.schemas.runs import RunCreateRequest
 from src.services import run_service
 
 
@@ -14,7 +14,7 @@ def list_runs(db: Session, *, status: str | None, page: int, page_size: int) -> 
 
 
 def get_run(db: Session, run_id: str) -> dict:
-    return serialize_run(run_service.get_run(db, run_id))
+    return run_service.get_run_payload(db, run_id)
 
 
 def create_run(
@@ -32,6 +32,16 @@ def create_run(
 
 def rerun(db: Session, run_id: str, *, user: User, request: Request) -> dict:
     return run_service.rerun(
+        db,
+        run_id,
+        user=user,
+        ip=getattr(request.state, "client_ip", None),
+        trace_id=getattr(request.state, "trace_id", None),
+    )
+
+
+def retry_failed(db: Session, run_id: str, *, user: User, request: Request) -> dict:
+    return run_service.retry_failed(
         db,
         run_id,
         user=user,

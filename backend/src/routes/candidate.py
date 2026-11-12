@@ -15,13 +15,20 @@ def list_candidates(
     run_id: str | None = Query(default=None),
     decision: str | None = Query(default=None),
     status: str | None = Query(default=None),
+    affected_only: bool = Query(default=False),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=PAGE_SIZE_DEFAULT, ge=1, le=100),
     user=Depends(require_permission("candidates:read")),
     db: Session = Depends(get_db),
 ) -> dict:
     return candidate_controller.list_candidates(
-        db, run_id=run_id, decision=decision, status=status, page=page, page_size=page_size
+        db,
+        run_id=run_id,
+        decision=decision,
+        status=status,
+        affected_only=affected_only,
+        page=page,
+        page_size=page_size,
     )
 
 

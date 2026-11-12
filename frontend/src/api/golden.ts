@@ -7,12 +7,13 @@ export const goldenApi = {
     query?: string;
     status?: string;
     cluster_id?: string;
+    affected_only?: boolean;
     page?: number;
     page_size?: number;
   }) => {
     const params = new URLSearchParams();
     Object.entries(query).forEach(([key, value]) => {
-      if (value !== undefined && value !== '') params.set(key, String(value));
+      if (value !== undefined && value !== '' && value !== false) params.set(key, String(value));
     });
     const suffix = params.toString();
     return api.get<Page<GoldenRecord>>(`/golden${suffix ? `?${suffix}` : ''}`);

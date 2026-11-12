@@ -13,5 +13,6 @@ export const runApi = {
   detail: (id: string) => api.get<Run>(`/runs/${id}`),
   create: (payload: { rule_id?: string; run_label?: string }) => api.post<Run>('/runs', payload),
   rerun: (id: string) => api.post<Run>(`/runs/${id}/rerun`),
+  retry: (id: string) => api.post<Run>(`/runs/${id}/retry`),
   auditLogs: () => api.get<{ items: AuditLog[] }>('/audit/logs?limit=12'),
 };

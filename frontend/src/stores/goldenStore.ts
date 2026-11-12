@@ -8,6 +8,7 @@ interface GoldenQuery {
   query?: string;
   status?: string;
   cluster_id?: string;
+  affected_only?: boolean;
   page?: number;
   page_size?: number;
 }

@@ -51,3 +51,14 @@ def rerun(
     _rate: None = rate_limit("runs"),
 ) -> dict:
     return run_controller.rerun(db, run_id, user=user, request=request)
+
+
+@router.post("/{run_id}/retry")
+def retry_failed(
+    run_id: str,
+    request: Request,
+    user=Depends(require_permission("runs:trigger")),
+    db: Session = Depends(get_db),
+    _rate: None = rate_limit("runs"),
+) -> dict:
+    return run_controller.retry_failed(db, run_id, user=user, request=request)

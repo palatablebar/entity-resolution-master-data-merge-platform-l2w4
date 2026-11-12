@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { runApi } from '../api/runs';
 import { EmptyState } from '../components/common/EmptyState';
+import { RuleVersionBar } from '../components/common/RuleVersionBar';
 import { StatusStamp } from '../components/common/StatusStamp';
 import { BLOCKING_KEY_LABELS, RUN_STATUS_LABELS, SCORE_BIN_LABELS } from '../constants/resolution';
 import { useRunPolling } from '../hooks/useRunPolling';
@@ -108,9 +109,29 @@ export const RunReportPage = () => {
     }
   };
 
+  const retry = async () => {
+    if (!detail) return;
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const run = await runApi.retry(detail.id);
+      setMessage('已按原冻结版本重新投递，worker 会清空并重建本卷产物。');
+      setSelectedId(run.id);
+      await loadRuns();
+    } catch (err) {
+      setError(toHumanMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const distribution = liveRun?.distribution ?? [];
   const maxBin = useMemo(() => Math.max(1, ...distribution), [distribution]);
   const params = (liveRun?.params ?? {}) as Record<string, unknown>;
+  const snapshot = liveRun?.rule_snapshot ?? null;
+  const comparison = liveRun?.rule_context?.comparison ?? null;
+  const impact = liveRun?.rule_impact_summary ?? null;
 
   return (
     <div className="enter">
@@ -120,16 +141,21 @@ export const RunReportPage = () => {
           <h1 className="page-title">解析卷宗</h1>
         </div>
         <div className="page-note">
-          每次运行都记录 blocking 命中、剪枝、判定分布、簇数量与耗时，并快照当时的规则参数。
-          参数不同，历史运行仍按当时的尺度解释。
+          每次运行在发起瞬间冻结规则版本，worker 只按该快照计算；之后的规则调整只影响新运行。
+          右侧把「本卷冻结版本」与「规则集当前版本」并置，并标出按当前规则会改变结果的候选与档案。
         </div>
         <div className="head-actions">
           <button className="btn primary" disabled={!canTrigger || busy} onClick={() => void trigger()}>
             {busy ? '投递中…' : '发起解析'}
           </button>
           <button className="btn" disabled={!canTrigger || busy || !detail} onClick={() => void rerun()}>
-            按本卷参数重跑
+            按本卷冻结版本重跑
           </button>
+          {detail?.status === 'failed' ? (
+            <button className="btn" disabled={!canTrigger || busy} onClick={() => void retry()}>
+              按原版本恢复
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -150,34 +176,48 @@ export const RunReportPage = () => {
                 <tr>
                   <th>批次</th>
                   <th>状态</th>
+                  <th>规则版本</th>
                   <th>候选</th>
                   <th>簇</th>
                 </tr>
               </thead>
               <tbody>
-                {runs.map((run) => (
-                  <tr
-                    key={run.id}
-                    className={`clickable${run.id === selectedId ? ' selected' : ''}`}
-                    onClick={() => setSelectedId(run.id)}
-                  >
-                    <td>
-                      <div className="truncate" title={run.run_label}>
-                        {run.run_label}
-                      </div>
-                      <div className="dim mono" style={{ fontSize: 11 }}>
-                        {formatDateTime(run.created_at)}
-                      </div>
-                    </td>
-                    <td>
-                      <StatusStamp kind="run" value={run.status} />
-                    </td>
-                    <td className="num">{run.candidate_pairs}</td>
-                    <td className="num">
-                      {run.clusters_auto}/{run.clusters_review}
-                    </td>
-                  </tr>
-                ))}
+                {runs.map((run) => {
+                  const runComparison = run.rule_context?.comparison ?? null;
+                  return (
+                    <tr
+                      key={run.id}
+                      className={`clickable${run.id === selectedId ? ' selected' : ''}`}
+                      onClick={() => setSelectedId(run.id)}
+                    >
+                      <td>
+                        <div className="truncate" title={run.run_label}>
+                          {run.run_label}
+                        </div>
+                        <div className="dim mono" style={{ fontSize: 11 }}>
+                          {formatDateTime(run.created_at)}
+                        </div>
+                      </td>
+                      <td>
+                        <StatusStamp kind="run" value={run.status} />
+                      </td>
+                      <td>
+                        <div className="mono" style={{ fontSize: 12 }}>
+                          v{run.rule_snapshot?.rule_version ?? String(run.params.rule_version ?? '—')}
+                        </div>
+                        {runComparison?.version_changed ? (
+                          <div className="dim" style={{ fontSize: 11 }}>
+                            当前 v{runComparison.current_rule_version ?? '—'}
+                          </div>
+                        ) : null}
+                      </td>
+                      <td className="num">{run.candidate_pairs}</td>
+                      <td className="num">
+                        {run.clusters_auto}/{run.clusters_review}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -197,6 +237,20 @@ export const RunReportPage = () => {
               {liveRun.error_message ? (
                 <div className="notice error" style={{ marginBottom: 12 }}>
                   {liveRun.error_code}: {liveRun.error_message}
+                  {liveRun.status === 'failed' ? (
+                    <div className="dim" style={{ fontSize: 12, marginTop: 4 }}>
+                      可点右上角「按原版本恢复」就地重投：仍使用本卷冻结版本，重复恢复不会新增候选 / 簇 / 档案。
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {snapshot ? (
+                <div className="dim" style={{ fontSize: 12, marginBottom: 10 }}>
+                  本卷冻结于 {formatDateTime(snapshot.frozen_at ?? liveRun.created_at)} · {snapshot.rule_name ?? '—'} v
+                  {snapshot.rule_version ?? '—'}
+                  {snapshot.rerun_of ? ' · 重跑自上一卷（沿用其冻结版本）' : ''}
+                  {snapshot.frozen_from === 'legacy_live_rule' ? ' · 旧运行补冻结' : ''}
                 </div>
               ) : null}
 
@@ -241,13 +295,19 @@ export const RunReportPage = () => {
                 分数集中在 0.9+ 说明来源数据质量较好；0.7-0.9 的尾部就是需要人工复核的部分。
               </div>
 
-              <div className="paper-label" style={{ marginTop: 16 }}>规则参数快照</div>
+              <div className="paper-label" style={{ marginTop: 16 }}>规则参数快照（本卷冻结，不随后续调整变化）</div>
               <table className="table">
                 <tbody>
                   <tr>
                     <td className="dim">规则</td>
                     <td>
-                      {String(params.rule_name ?? '—')} · v{String(params.rule_version ?? '—')}
+                      {String(params.rule_name ?? snapshot?.rule_name ?? '—')} · v
+                      {String(params.rule_version ?? snapshot?.rule_version ?? '—')}
+                      {snapshot?.frozen_at ? (
+                        <span className="dim" style={{ fontSize: 11, marginLeft: 8 }}>
+                          冻结于 {formatDateTime(snapshot.frozen_at)}
+                        </span>
+                      ) : null}
                     </td>
                   </tr>
                   <tr>
@@ -275,6 +335,47 @@ export const RunReportPage = () => {
                   </tr>
                 </tbody>
               </table>
+
+              <RuleVersionBar
+                comparison={comparison}
+                note={
+                  comparison?.snapshot_missing
+                    ? '该运行创建于冻结机制上线前，缺少独立快照；以下对照基于其引用规则集的当前值，仅供参考。'
+                    : null
+                }
+              />
+
+              {impact && liveRun.status === 'succeeded' ? (
+                <div className="rule-impact-row" style={{ marginTop: 12 }}>
+                  <span className={`stamp ${impact.rule_changed ? 'amber' : 'olive'}`}>
+                    {impact.rule_changed ? '规则已变化' : '规则未变化'}
+                  </span>
+                  {impact.basis === 'unchanged' || !comparison?.affected_basis ? (
+                    <span>当前规则与本卷冻结值一致，候选与档案无需重解释。</span>
+                  ) : (
+                    <span>
+                      按当前规则重算，本卷 {impact.candidates_total} 个候选中{' '}
+                      <strong>{impact.candidates_affected}</strong> 个判定会变；{impact.golden_total} 份黄金档案中{' '}
+                      <strong>{impact.golden_affected}</strong> 份字段胜者会变。
+                    </span>
+                  )}
+                </div>
+              ) : null}
+
+              {impact && comparison?.affected_basis && (impact.candidate_ids.length > 0 || impact.golden_ids.length > 0) ? (
+                <div className="btn-row" style={{ marginTop: 10 }}>
+                  {impact.candidate_ids.length > 0 ? (
+                    <a className="btn ghost" href={`/candidates?run=${liveRun.id}&affected=1`}>
+                      查看受影响的候选（{impact.candidates_affected}）
+                    </a>
+                  ) : null}
+                  {impact.golden_ids.length > 0 ? (
+                    <a className="btn ghost" href={`/golden?run=${liveRun.id}&affected=1`}>
+                      查看受影响的档案（{impact.golden_affected}）
+                    </a>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="paper-card">

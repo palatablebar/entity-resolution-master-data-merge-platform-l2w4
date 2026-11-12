@@ -25,6 +25,7 @@ def list_golden(
     query: str | None = Query(default=None),
     status: str | None = Query(default=None),
     cluster_id: str | None = Query(default=None),
+    affected_only: bool = Query(default=False),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=PAGE_SIZE_DEFAULT, ge=1, le=100),
     user=Depends(require_permission("golden:read")),
@@ -36,6 +37,7 @@ def list_golden(
         query=query,
         status=status,
         cluster_id=cluster_id,
+        affected_only=affected_only,
         page=page,
         page_size=page_size,
     )

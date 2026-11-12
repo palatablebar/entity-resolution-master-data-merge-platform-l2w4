@@ -20,6 +20,7 @@ def list_golden(
     cluster_id: str | None,
     page: int,
     page_size: int,
+    affected_only: bool = False,
 ) -> dict:
     return golden_service.list_golden_records(
         db,
@@ -29,6 +30,7 @@ def list_golden(
         cluster_id=cluster_id,
         page=page,
         page_size=page_size,
+        affected_only=affected_only,
     )
 
 

@@ -745,3 +745,63 @@ textarea:focus {
     animation: none !important;
   }
 }
+
+/* ---------- 规则版本对照 ---------- */
+
+.rule-compare {
+  margin-top: 14px;
+  border: 1px dashed var(--line-strong);
+  background-color: var(--paper-deep);
+  padding: 10px 12px;
+}
+
+.rule-compare.changed {
+  border-color: var(--vermilion-soft);
+  border-style: solid;
+}
+
+.rule-compare-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.rule-compare-grid {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.rule-compare-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rule-compare-arrow {
+  font-family: var(--font-display);
+  color: var(--ink-dim);
+  font-size: 15px;
+}
+
+.rule-compare-note {
+  font-size: 12px;
+  color: var(--vermilion);
+}
+
+.rule-impact-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.rule-impact-row.hit {
+  color: var(--vermilion);
+}

@@ -6,6 +6,7 @@ interface CandidateQuery {
   run_id?: string;
   decision?: string;
   status?: string;
+  affected_only?: boolean;
   page?: number;
   page_size?: number;
 }
